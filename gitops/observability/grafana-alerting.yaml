@@ -1,0 +1,151 @@
+# =============================================================================
+# Grafana Unified Alerting - Regras de Alerta, PagerDuty, Discord e Self-Healing
+# =============================================================================
+# Provisionado automaticamente no Grafana via sidecar de alerting (grafana_alert: "1")
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: togglemaster-grafana-alerting
+  namespace: monitoring
+  labels:
+    grafana_alert: "1"
+    app.kubernetes.io/part-of: togglemaster-observability
+data:
+  contactpoints.yaml: |
+    apiVersion: 1
+    contactPoints:
+      - orgId: 1
+        name: togglemaster-sre-response
+        receivers:
+          # 1. Gerenciamento de Incidentes: PagerDuty (abre incidente automaticamente)
+          - uid: pagerduty-incident
+            type: pagerduty
+            disableResolveMessage: false
+            settings:
+              integrationKey: ${PAGERDUTY_INTEGRATION_KEY}
+              severity: critical
+              class: "HTTP 5xx Error Rate > 5%"
+              component: "ToggleMaster Microservices"
+              group: "togglemaster-prod"
+              summary: "[FIRING] {{ .CommonLabels.alertname }} no servico {{ .CommonLabels.service }}"
+
+          # 2. Notificação ChatOps: Discord (envia alerta detalhado no canal)
+          - uid: discord-chatops
+            type: discord
+            disableResolveMessage: false
+            settings:
+              url: ${DISCORD_WEBHOOK_URL}
+              use_discord_username: true
+              title: "🚨 [ToggleMaster SRE] Incidente Detectado: {{ .CommonLabels.alertname }}"
+              message: |
+                **Status:** `{{ .Status | toUpper }}`
+                **Serviço Afetado:** `{{ .CommonLabels.service }}`
+                **Namespace:** `{{ .CommonLabels.namespace }}`
+                **Severidade:** `{{ .CommonLabels.severity }}`
+                **Resumo:** Taxa de erros HTTP 5xx ultrapassou o limite crítico de 5%.
+                **Ação Automática (Self-Healing):** Acionando webhook para `kubectl rollout restart deployment/{{ .CommonLabels.service }} -n {{ .CommonLabels.namespace }}`.
+
+          # 3. Automação de Self-Healing: Webhook In-Cluster (executa rollout restart + GitHub Actions)
+          - uid: self-healing-webhook
+            type: webhook
+            disableResolveMessage: false
+            settings:
+              url: http://self-healing-service.monitoring.svc.cluster.local:8080/webhook
+              httpMethod: POST
+
+  policies.yaml: |
+    apiVersion: 1
+    policies:
+      - orgId: 1
+        receiver: togglemaster-sre-response
+        group_by: ['alertname', 'service']
+        group_wait: 10s
+        group_interval: 30s
+        repeat_interval: 5m
+
+  alertrules.yaml: |
+    apiVersion: 1
+    groups:
+      - orgId: 1
+        name: togglemaster-golden-signals
+        folder: ToggleMaster SRE
+        interval: 15s
+        rules:
+          # Alerta 1: Taxa de erros HTTP 5xx do auth-service > 5%
+          - uid: auth-service-5xx-alert
+            title: AuthServiceHigh5xxErrorRate
+            condition: C
+            for: 30s
+            noDataState: OK
+            execErrState: OK
+            annotations:
+              summary: "Taxa de erros HTTP 5xx no auth-service acima de 5%"
+              description: "O microsserviço auth-service está apresentando taxa de erros HTTP 5xx superior a 5%. Acionando PagerDuty, Discord e Self-Healing (rollout restart)."
+              runbook_url: "https://github.com/RicardoMarassato/fiap-postech-tc4-togglemaster/blob/main/README.md"
+            labels:
+              service: auth-service
+              namespace: togglemaster
+              severity: critical
+              team: sre
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 120
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: "(sum(rate(http_requests_total{service=\"auth-service\", status_code=~\"5..\"}[1m])) / clamp_min(sum(rate(http_requests_total{service=\"auth-service\"}[1m])), 0.0001)) * 100"
+                  instant: true
+                  refId: A
+              - refId: C
+                relativeTimeRange:
+                  from: 120
+                  to: 0
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: gt
+                        params: [5]
+
+          # Alerta 2: Taxa de erros HTTP 5xx do evaluation-service > 5%
+          - uid: evaluation-service-5xx-alert
+            title: EvaluationServiceHigh5xxErrorRate
+            condition: C
+            for: 30s
+            noDataState: OK
+            execErrState: OK
+            annotations:
+              summary: "Taxa de erros HTTP 5xx no evaluation-service acima de 5%"
+              description: "O microsserviço evaluation-service está apresentando falha silenciosa/crítica (HTTP 5xx > 5%). Acionando PagerDuty, Discord e Self-Healing (rollout restart)."
+              runbook_url: "https://github.com/RicardoMarassato/fiap-postech-tc4-togglemaster/blob/main/README.md"
+            labels:
+              service: evaluation-service
+              namespace: togglemaster
+              severity: critical
+              team: sre
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 120
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: "(sum(rate(http_requests_total{service=\"evaluation-service\", status_code=~\"5..\"}[1m])) / clamp_min(sum(rate(http_requests_total{service=\"evaluation-service\"}[1m])), 0.0001)) * 100"
+                  instant: true
+                  refId: A
+              - refId: C
+                relativeTimeRange:
+                  from: 120
+                  to: 0
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: gt
+                        params: [5]

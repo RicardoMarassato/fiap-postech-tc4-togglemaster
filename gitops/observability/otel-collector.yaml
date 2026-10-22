@@ -1,0 +1,238 @@
+# =============================================================================
+# OpenTelemetry Collector - Peça Central de Observabilidade (Fase 4)
+# =============================================================================
+# Recebe Traces, Métricas e Logs via OTLP (gRPC 4317 / HTTP 4318) dos 5
+# microsserviços do ToggleMaster e roteia para:
+# - Prometheus (Métricas via Remote Write e Endpoint :8889/metrics)
+# - Grafana Loki (Logs via OTLP HTTP /otlp e Loki Push API)
+# - New Relic APM (Traces, Métricas e Logs via OTLP HTTP com License Key)
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: monitoring
+  labels:
+    app: otel-collector
+data:
+  otel-collector-config.yaml: |
+    receivers:
+      # Recebe telemetria OTLP diretamente dos 5 microsserviços (Go e Python)
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+      # Coleta complementar dos endpoints /metrics dos 5 microsserviços
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: 'togglemaster-microservices'
+              scrape_interval: 15s
+              static_configs:
+                - targets:
+                    - 'auth-service.togglemaster.svc.cluster.local:8001'
+                    - 'flag-service.togglemaster.svc.cluster.local:8002'
+                    - 'targeting-service.togglemaster.svc.cluster.local:8003'
+                    - 'evaluation-service.togglemaster.svc.cluster.local:8004'
+                    - 'analytics-service.togglemaster.svc.cluster.local:8005'
+
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 256
+        spike_limit_mib: 64
+
+      resource:
+        attributes:
+          - key: service.namespace
+            value: togglemaster
+            action: upsert
+          - key: deployment.environment
+            value: production
+            action: upsert
+
+      batch:
+        send_batch_size: 1024
+        timeout: 5s
+
+    exporters:
+      # 1. Exportador Prometheus (disponibiliza métricas em :8889/metrics para scrape do Prometheus)
+      prometheus:
+        endpoint: "0.0.0.0:8889"
+        resource_to_telemetry_conversion:
+          enabled: true
+
+      # 2. Exportador Prometheus Remote Write (envia ativamente para o Prometheus no cluster)
+      prometheusremotewrite:
+        endpoint: "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090/api/v1/write"
+        tls:
+          insecure: true
+        resource_to_telemetry_conversion:
+          enabled: true
+
+      # 3. Exportador Loki (envia todos os logs OTLP centralizados para o Loki)
+      loki:
+        endpoint: "http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push"
+        default_labels_enabled:
+          exporter: false
+          job: true
+
+      # 4. Exportador New Relic APM (envia Traces, Métricas e Logs via OTLP para o New Relic)
+      otlphttp/newrelic:
+        endpoint: "${env:NEW_RELIC_OTLP_ENDPOINT}"
+        headers:
+          api-key: "${env:NEW_RELIC_LICENSE_KEY}"
+
+      # 5. Exportador Debug (permite evidenciar no vídeo o roteamento em tempo real nos logs do pod)
+      debug:
+        verbosity: normal
+
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+
+    service:
+      extensions: [health_check]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, resource, batch]
+          exporters: [otlphttp/newrelic, debug]
+
+        metrics:
+          receivers: [otlp, prometheus]
+          processors: [memory_limiter, resource, batch]
+          exporters: [prometheus, prometheusremotewrite, otlphttp/newrelic, debug]
+
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, resource, batch]
+          exporters: [loki, otlphttp/newrelic, debug]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: monitoring
+  labels:
+    app: otel-collector
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/part-of: togglemaster-observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8889"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector-contrib:0.108.0
+          args:
+            - "--config=/etc/otelcol-contrib/otel-collector-config.yaml"
+          ports:
+            - containerPort: 4317
+              name: otlp-grpc
+              protocol: TCP
+            - containerPort: 4318
+              name: otlp-http
+              protocol: TCP
+            - containerPort: 8888
+              name: self-metrics
+              protocol: TCP
+            - containerPort: 8889
+              name: prom-exporter
+              protocol: TCP
+            - containerPort: 13133
+              name: health
+              protocol: TCP
+          env:
+            - name: NEW_RELIC_LICENSE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: observability-secrets
+                  key: NEW_RELIC_LICENSE_KEY
+            - name: NEW_RELIC_OTLP_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: observability-secrets
+                  key: NEW_RELIC_OTLP_ENDPOINT
+          volumeMounts:
+            - name: otel-collector-config-vol
+              mountPath: /etc/otelcol-contrib/otel-collector-config.yaml
+              subPath: otel-collector-config.yaml
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 300Mi
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 13133
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 13133
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: otel-collector-config-vol
+          configMap:
+            name: otel-collector-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: monitoring
+  labels:
+    app: otel-collector
+spec:
+  type: ClusterIP
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+      protocol: TCP
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+      protocol: TCP
+    - name: prom-exporter
+      port: 8889
+      targetPort: 8889
+      protocol: TCP
+  selector:
+    app: otel-collector
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: otel-collector-monitor
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: otel-collector
+  endpoints:
+    - port: prom-exporter
+      interval: 15s
+      path: /metrics
+      honorLabels: true

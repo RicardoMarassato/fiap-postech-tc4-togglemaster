@@ -1,0 +1,127 @@
+# =============================================================================
+# Self-Healing Automation Workflow - ToggleMaster (Fase 4)
+# =============================================================================
+# Acionado automaticamente via Webhook (repository_dispatch enviado pelo
+# alerta do Grafana / Self-Healing Service) ou manualmente (workflow_dispatch)
+# para executar `kubectl rollout restart deployment/<service> -n togglemaster`
+# e mitigar incidentes sem intervenção humana.
+# =============================================================================
+
+name: Self-Healing Runbook Automation
+
+on:
+  repository_dispatch:
+    types: [self-healing-alert]
+
+  workflow_dispatch:
+    inputs:
+      service_name:
+        description: 'Microsserviço para reiniciar (Rollout Restart)'
+        required: true
+        default: 'auth-service'
+        type: choice
+        options:
+          - auth-service
+          - evaluation-service
+          - flag-service
+          - targeting-service
+          - analytics-service
+      namespace:
+        description: 'Namespace do Kubernetes'
+        required: true
+        default: 'togglemaster'
+        type: string
+      alert_name:
+        description: 'Nome do alerta que disparou o Self-Healing'
+        required: false
+        default: 'AuthServiceHigh5xxErrorRate'
+        type: string
+
+env:
+  AWS_REGION: us-east-1
+  EKS_CLUSTER_NAME: togglemaster-prod-eks
+
+jobs:
+  self-healing-remediation:
+    name: Mitigar Incidente (Rollout Restart)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Determinar parâmetros do incidente
+        id: params
+        run: |
+          if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+            SERVICE="${{ github.event.client_payload.service }}"
+            NAMESPACE="${{ github.event.client_payload.namespace }}"
+            ALERT="${{ github.event.client_payload.alert_name }}"
+          else
+            SERVICE="${{ inputs.service_name }}"
+            NAMESPACE="${{ inputs.namespace }}"
+            ALERT="${{ inputs.alert_name }}"
+          fi
+          SERVICE=${SERVICE:-auth-service}
+          NAMESPACE=${NAMESPACE:-togglemaster}
+          ALERT=${ALERT:-AuthServiceHigh5xxErrorRate}
+
+          echo "service=${SERVICE}" >> $GITHUB_OUTPUT
+          echo "namespace=${NAMESPACE}" >> $GITHUB_OUTPUT
+          echo "alert=${ALERT}" >> $GITHUB_OUTPUT
+          echo "🔥 Iniciando Self-Healing para ${SERVICE} (Namespace: ${NAMESPACE}) devido ao alerta ${ALERT}"
+
+      - name: Configurar credenciais AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Configurar kubeconfig para o cluster EKS
+        run: |
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.EKS_CLUSTER_NAME }}
+
+      - name: Executar Self-Healing (kubectl rollout restart)
+        run: |
+          SERVICE="${{ steps.params.outputs.service }}"
+          NAMESPACE="${{ steps.params.outputs.namespace }}"
+
+          echo "=== Estado atual dos pods antes do Self-Healing ==="
+          kubectl get pods -n "${NAMESPACE}" -l "app=${SERVICE}"
+
+          echo "=== Executando Rollout Restart automático em deployment/${SERVICE} ==="
+          kubectl rollout restart "deployment/${SERVICE}" -n "${NAMESPACE}"
+
+          echo "=== Aguardando conclusão do Rollout ==="
+          kubectl rollout status "deployment/${SERVICE}" -n "${NAMESPACE}" --timeout=120s
+
+          echo "=== Estado dos pods após o Self-Healing ==="
+          kubectl get pods -n "${NAMESPACE}" -l "app=${SERVICE}"
+
+      - name: Notificar canal ChatOps (Discord)
+        if: always() && secrets.DISCORD_WEBHOOK_URL != ''
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          SERVICE="${{ steps.params.outputs.service }}"
+          NAMESPACE="${{ steps.params.outputs.namespace }}"
+          ALERT="${{ steps.params.outputs.alert }}"
+          STATUS="${{ job.status }}"
+
+          curl -s -H "Content-Type: application/json" \
+            -X POST "${DISCORD_WEBHOOK_URL}" \
+            -d "{
+              \"username\": \"GitHub Actions Self-Healing\",
+              \"embeds\": [{
+                \"title\": \"🤖 Self-Healing Runbook Finalizado (${STATUS})\",
+                \"description\": \"**Alerta:** \`${ALERT}\`\\n**Ação:** \`kubectl rollout restart deployment/${SERVICE} -n ${NAMESPACE}\`\\n**Workflow Run:** [Ver no GitHub Actions](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\",
+                \"color\": 3066993
+              }]
+            }" || true
+
+      - name: Resumo da Execução
+        run: |
+          echo "## 🛠️ Relatório de Self-Healing Automático" >> $GITHUB_STEP_SUMMARY
+          echo "- **Alerta Disparado:** \`${{ steps.params.outputs.alert }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Serviço Mitigado:** \`${{ steps.params.outputs.service }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Namespace:** \`${{ steps.params.outputs.namespace }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Comando Executado:** \`kubectl rollout restart deployment/${{ steps.params.outputs.service }} -n ${{ steps.params.outputs.namespace }}\`" >> $GITHUB_STEP_SUMMARY

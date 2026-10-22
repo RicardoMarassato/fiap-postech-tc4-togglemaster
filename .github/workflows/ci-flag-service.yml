@@ -1,0 +1,34 @@
+# =============================================================================
+# CI Pipeline - Flag Service (Python)
+# =============================================================================
+
+name: CI - Flag Service
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'services/flag-service/**'
+      - '.github/workflows/ci-flag-service.yml'
+      - '.github/workflows/_reusable-python-ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'services/flag-service/**'
+      - '.github/workflows/ci-flag-service.yml'
+      - '.github/workflows/_reusable-python-ci.yml'
+
+permissions:
+  contents: write
+  id-token: write
+  security-events: write
+
+jobs:
+  ci:
+    name: Flag Service CI
+    uses: ./.github/workflows/_reusable-python-ci.yml
+    with:
+      service_name: flag-service
+      service_path: services/flag-service
+      python_version: '3.12'
+    secrets: inherit

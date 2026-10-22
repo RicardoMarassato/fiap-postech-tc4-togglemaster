@@ -1,0 +1,296 @@
+# =============================================================================
+# ArgoCD Applications - ToggleMaster Fase 4 (Apps + Observabilidade + Self-Healing)
+# =============================================================================
+# Este arquivo configura o ArgoCD (GitOps) para monitorar e sincronizar:
+# 1. Os 5 microsserviços do ToggleMaster (namespace: togglemaster)
+# 2. A stack de Monitoramento Opensource via Helm Charts (Prometheus, Grafana, Loki)
+# 3. O OpenTelemetry Collector, Dashboards, Alertas e Self-Healing (namespace: monitoring)
+# =============================================================================
+
+# Base Resources (Namespaces, ConfigMaps, Secrets, Ingress)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: togglemaster
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/RicardoMarassato/fiap-postech-tc4-togglemaster.git
+    targetRevision: main
+    path: gitops/base
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: togglemaster
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+# Auth Service
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: auth-service
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: togglemaster
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/RicardoMarassato/fiap-postech-tc4-togglemaster.git
+    targetRevision: main
+    path: gitops/apps/auth-service
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: togglemaster
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+---
+# Flag Service
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: flag-service
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: togglemaster
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/RicardoMarassato/fiap-postech-tc4-togglemaster.git
+    targetRevision: main
+    path: gitops/apps/flag-service
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: togglemaster
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+---
+# Targeting Service
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: targeting-service
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: togglemaster
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/RicardoMarassato/fiap-postech-tc4-togglemaster.git
+    targetRevision: main
+    path: gitops/apps/targeting-service
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: togglemaster
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+---
+# Evaluation Service
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: evaluation-service
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: togglemaster
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/RicardoMarassato/fiap-postech-tc4-togglemaster.git
+    targetRevision: main
+    path: gitops/apps/evaluation-service
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: togglemaster
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+---
+# Analytics Service
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: analytics-service
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: togglemaster
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/RicardoMarassato/fiap-postech-tc4-togglemaster.git
+    targetRevision: main
+    path: gitops/apps/analytics-service
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: togglemaster
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+---
+# =============================================================================
+# 1. Monitoramento Opensource: Prometheus + Grafana (Helm Chart via GitOps)
+# =============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kube-prometheus-stack
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: togglemaster-observability
+spec:
+  project: default
+  source:
+    repoURL: https://prometheus-community.github.io/helm-charts
+    chart: kube-prometheus-stack
+    targetRevision: 65.1.1
+    helm:
+      releaseName: kube-prometheus-stack
+      valuesObject:
+        # Otimizado para caber com folga nos worker nodes EKS
+        alertmanager:
+          enabled: true
+        prometheus:
+          prometheusSpec:
+            enableRemoteWriteReceiver: true
+            serviceMonitorSelectorNilUsesHelmValues: false
+            podMonitorSelectorNilUsesHelmValues: false
+            ruleSelectorNilUsesHelmValues: false
+            retention: 2d
+            resources:
+              requests:
+                cpu: 100m
+                memory: 256Mi
+              limits:
+                cpu: 500m
+                memory: 768Mi
+        grafana:
+          enabled: true
+          adminPassword: "admin"
+          envFromSecret: observability-secrets
+          sidecar:
+            dashboards:
+              enabled: true
+              label: grafana_dashboard
+              searchNamespace: ALL
+            alerts:
+              enabled: true
+              label: grafana_alert
+              searchNamespace: ALL
+          additionalDataSources:
+            - name: Loki
+              type: loki
+              uid: loki
+              access: proxy
+              url: http://loki.monitoring.svc.cluster.local:3100
+              isDefault: false
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 384Mi
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+---
+# =============================================================================
+# 2. Centralização de Logs: Grafana Loki + Promtail (Helm Chart via GitOps)
+# =============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: loki
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: togglemaster-observability
+spec:
+  project: default
+  source:
+    repoURL: https://grafana.github.io/helm-charts
+    chart: loki-stack
+    targetRevision: 2.10.2
+    helm:
+      releaseName: loki
+      valuesObject:
+        loki:
+          enabled: true
+          isDefault: false
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 384Mi
+        promtail:
+          enabled: true
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 150m
+              memory: 128Mi
+        grafana:
+          enabled: false
+        prometheus:
+          enabled: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+---
+# =============================================================================
+# 3. OpenTelemetry Collector, Dashboards, Alertas e Self-Healing (GitOps)
+# =============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: observability-stack
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: togglemaster-observability
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/RicardoMarassato/fiap-postech-tc4-togglemaster.git
+    targetRevision: main
+    path: gitops/observability
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

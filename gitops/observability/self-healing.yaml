@@ -1,0 +1,361 @@
+# =============================================================================
+# Automação de Self-Healing In-Cluster (Webhook Receiver + RBAC no Kubernetes)
+# =============================================================================
+# Recebe o webhook do alerta do Grafana (quando a taxa de erros 5xx > 5%) e
+# executa automaticamente o equivalente a:
+#   kubectl rollout restart deployment/<service> -n togglemaster
+# via API do Kubernetes (usando ServiceAccount com permissão de patch em
+# Deployments no namespace togglemaster), além de notificar o Discord e
+# acionar o workflow GitHub Actions via repository_dispatch.
+# =============================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: self-healing-sa
+  namespace: monitoring
+  labels:
+    app: self-healing-service
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: self-healing-deployment-restarter
+  namespace: togglemaster
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: self-healing-deployment-restarter-binding
+  namespace: togglemaster
+subjects:
+  - kind: ServiceAccount
+    name: self-healing-sa
+    namespace: monitoring
+roleRef:
+  kind: Role
+  name: self-healing-deployment-restarter
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: self-healing-script
+  namespace: monitoring
+data:
+  server.py: |
+    import datetime
+    import http.server
+    import json
+    import logging
+    import os
+    import ssl
+    import time
+    import urllib.request
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] [SELF-HEALING] %(message)s",
+    )
+    log = logging.getLogger("self-healing-service")
+
+    TARGET_NAMESPACE = os.getenv("TARGET_NAMESPACE", "togglemaster")
+    COOLDOWN_SECONDS = int(os.getenv("COOLDOWN_SECONDS", "60"))
+    DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
+    GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+    GITHUB_REPOSITORY = os.getenv(
+        "GITHUB_REPOSITORY", "RicardoMarassato/fiap-postech-tc4-togglemaster"
+    )
+    ALLOWED_DEPLOYMENTS = {
+        "auth-service",
+        "flag-service",
+        "targeting-service",
+        "evaluation-service",
+        "analytics-service",
+    }
+
+    _last_restart = {}
+    _events = []
+
+    def restart_deployment(deployment_name: str, namespace: str, alert_name: str):
+        now_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+        ca_path = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+
+        patch_body = {
+            "spec": {
+                "template": {
+                    "metadata": {
+                        "annotations": {
+                            "kubectl.kubernetes.io/restartedAt": now_iso,
+                            "self-healing.togglemaster.io/alert": alert_name,
+                        }
+                    }
+                }
+            }
+        }
+
+        with open(token_path, "r", encoding="utf-8") as f:
+            token = f.read().strip()
+
+        k8s_host = os.getenv("KUBERNETES_SERVICE_HOST", "kubernetes.default.svc")
+        k8s_port = os.getenv("KUBERNETES_SERVICE_PORT", "443")
+        url = f"https://{k8s_host}:{k8s_port}/apis/apps/v1/namespaces/{namespace}/deployments/{deployment_name}"
+
+        ctx = ssl.create_default_context(cafile=ca_path if os.path.exists(ca_path) else None)
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(patch_body).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/strategic-merge-patch+json",
+                "Accept": "application/json",
+            },
+            method="PATCH",
+        )
+        with urllib.request.urlopen(req, context=ctx, timeout=10) as resp:
+            status = resp.getcode()
+            log.info(
+                " Executado: kubectl rollout restart deployment/%s -n %s (HTTP %s, restartedAt=%s)",
+                deployment_name,
+                namespace,
+                status,
+                now_iso,
+            )
+            return True, f"Rollout restart applied at {now_iso} (HTTP {status})"
+
+    def notify_discord(deployment_name: str, namespace: str, alert_name: str, details: str):
+        if not DISCORD_WEBHOOK_URL or "REPLACE_WITH" in DISCORD_WEBHOOK_URL:
+            return
+        try:
+            payload = {
+                "username": "ToggleMaster Self-Healing Bot",
+                "embeds": [
+                    {
+                        "title": f"🛠️ Self-Healing Executado Automaticamente: {deployment_name}",
+                        "description": (
+                            f"O alerta **{alert_name}** disparou e a automação de Self-Healing "
+                            f"executou a ação corretiva sem intervenção humana.\n\n"
+                            f"**Comando Equivalente:** `kubectl rollout restart deployment/{deployment_name} -n {namespace}`\n"
+                            f"**Detalhes:** `{details}`"
+                        ),
+                        "color": 3066993,
+                    }
+                ],
+            }
+            req = urllib.request.Request(
+                DISCORD_WEBHOOK_URL,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "ToggleMaster-SelfHealing/1.0",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5):
+                log.info("Notificação de Self-Healing enviada para o Discord!")
+        except Exception as exc:
+            log.warning("Aviso ao enviar notificação ao Discord: %s", exc)
+
+    def trigger_github_dispatch(deployment_name: str, namespace: str, alert_name: str):
+        if not GITHUB_TOKEN:
+            return
+        try:
+            url = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/dispatches"
+            payload = {
+                "event_type": "self-healing-alert",
+                "client_payload": {
+                    "service": deployment_name,
+                    "namespace": namespace,
+                    "alert_name": alert_name,
+                },
+            }
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bearer {GITHUB_TOKEN}",
+                    "Accept": "application/vnd.github+json",
+                    "Content-Type": "application/json",
+                    "User-Agent": "ToggleMaster-SelfHealing/1.0",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5):
+                log.info("GitHub Actions repository_dispatch acionado com sucesso!")
+        except Exception as exc:
+            log.warning("Aviso ao acionar GitHub Actions: %s", exc)
+
+    class SelfHealingHandler(http.server.BaseHTTPRequestHandler):
+        def _send_json(self, code: int, data: dict):
+            body = json.dumps(data).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            if self.path == "/health":
+                self._send_json(200, {"status": "ok", "service": "self-healing-service"})
+            elif self.path == "/events":
+                self._send_json(200, {"events": _events})
+            else:
+                self._send_json(404, {"error": "not found"})
+
+        def do_POST(self):
+            if self.path != "/webhook":
+                self._send_json(404, {"error": "not found"})
+                return
+
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length).decode("utf-8") if length > 0 else "{}"
+            try:
+                payload = json.loads(raw)
+            except Exception:
+                payload = {}
+
+            log.info("Webhook recebido do Grafana Alerting: %s", raw)
+            status = payload.get("status", "firing")
+            alerts = payload.get("alerts") or [payload]
+            actions = []
+
+            for alert in alerts:
+                a_status = alert.get("status", status)
+                labels = alert.get("labels") or payload.get("commonLabels") or {}
+                alert_name = labels.get("alertname", payload.get("title", "AuthServiceHigh5xxErrorRate"))
+                service_name = labels.get("service") or labels.get("app") or "auth-service"
+                namespace = labels.get("namespace", TARGET_NAMESPACE)
+
+                if a_status != "firing":
+                    log.info("Alerta %s com status '%s' (ignorado).", alert_name, a_status)
+                    continue
+
+                if service_name not in ALLOWED_DEPLOYMENTS:
+                    service_name = "auth-service"
+
+                now = time.time()
+                if now - _last_restart.get(service_name, 0) < COOLDOWN_SECONDS:
+                    log.info("Cooldown ativo para %s, ignorando restart repetido.", service_name)
+                    continue
+
+                try:
+                    ok, details = restart_deployment(service_name, namespace, alert_name)
+                    _last_restart[service_name] = now
+                    record = {
+                        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                        "alert": alert_name,
+                        "service": service_name,
+                        "namespace": namespace,
+                        "command": f"kubectl rollout restart deployment/{service_name} -n {namespace}",
+                        "success": ok,
+                        "details": details,
+                    }
+                    _events.append(record)
+                    actions.append(record)
+                    notify_discord(service_name, namespace, alert_name, details)
+                    trigger_github_dispatch(service_name, namespace, alert_name)
+                except Exception as exc:
+                    log.error("Erro ao executar rollout restart em %s: %s", service_name, exc)
+
+            self._send_json(200, {"status": "processed", "actions_taken": actions})
+
+    if __name__ == "__main__":
+        port = int(os.getenv("PORT", "8080"))
+        log.info("Iniciando Self-Healing Webhook Server na porta %d...", port)
+        server = http.server.ThreadingHTTPServer(("0.0.0.0", port), SelfHealingHandler)
+        server.serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: self-healing-service
+  namespace: monitoring
+  labels:
+    app: self-healing-service
+    app.kubernetes.io/part-of: togglemaster-observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: self-healing-service
+  template:
+    metadata:
+      labels:
+        app: self-healing-service
+    spec:
+      serviceAccountName: self-healing-sa
+      containers:
+        - name: self-healing-service
+          image: python:3.12-alpine
+          command: ["python", "-u", "/app/server.py"]
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: PORT
+              value: "8080"
+            - name: TARGET_NAMESPACE
+              value: "togglemaster"
+            - name: COOLDOWN_SECONDS
+              value: "45"
+            - name: DISCORD_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: observability-secrets
+                  key: DISCORD_WEBHOOK_URL
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: observability-secrets
+                  key: GITHUB_TOKEN
+          volumeMounts:
+            - name: script-vol
+              mountPath: /app/server.py
+              subPath: server.py
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 5
+      volumes:
+        - name: script-vol
+          configMap:
+            name: self-healing-script
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: self-healing-service
+  namespace: monitoring
+  labels:
+    app: self-healing-service
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+      name: http
+  selector:
+    app: self-healing-service
