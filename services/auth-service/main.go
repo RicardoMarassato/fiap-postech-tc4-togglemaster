@@ -107,6 +107,17 @@ func connectDB(databaseURL string) (*sql.DB, error) {
 		return nil, err
 	}
 
-	logStruct("INFO", "Conectado ao PostgreSQL com sucesso!", nil)
+	schema := `CREATE TABLE IF NOT EXISTS api_keys (
+		id SERIAL PRIMARY KEY,
+		name VARCHAR(100) NOT NULL,
+		key_hash VARCHAR(64) NOT NULL UNIQUE,
+		is_active BOOLEAN DEFAULT true,
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+	);`
+	if _, err = db.Exec(schema); err != nil {
+		return nil, err
+	}
+
+	logStruct("INFO", "Conectado ao PostgreSQL e schema validado com sucesso!", nil)
 	return db, nil
 }

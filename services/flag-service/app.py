@@ -33,7 +33,23 @@ if not DATABASE_URL or not AUTH_SERVICE_URL:
 # Inicializa o pool de conexões (Mín: 1, Máx: 5 conexões)
 try:
     pool = SimpleConnectionPool(1, 5, dsn=DATABASE_URL)
-    log.info("Pool de conexões com o PostgreSQL inicializado.")
+    conn = pool.getconn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS flags (
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(100) UNIQUE NOT NULL,
+                    description TEXT,
+                    is_enabled BOOLEAN NOT NULL DEFAULT false,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+        conn.commit()
+    finally:
+        pool.putconn(conn)
+    log.info("Pool de conexões com o PostgreSQL inicializado e tabela flags garantida.")
 except psycopg2.OperationalError as e:
     log.critical(f"Erro fatal ao conectar ao PostgreSQL: {e}")
     sys.exit(1)

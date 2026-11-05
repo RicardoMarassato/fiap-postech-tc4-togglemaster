@@ -162,7 +162,7 @@ spec:
       valuesObject:
         # Otimizado para caber com folga nos worker nodes EKS
         alertmanager:
-          enabled: true
+          enabled: false
         prometheus:
           prometheusSpec:
             enableRemoteWriteReceiver: true

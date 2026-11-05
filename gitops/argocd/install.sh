@@ -17,6 +17,9 @@ kubectl create namespace togglemaster --dry-run=client -o yaml | kubectl apply -
 # Instalar ArgoCD usando Server-Side Apply (necessário para CRDs grandes)
 kubectl apply -n argocd --server-side --force-conflicts -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
+# Desativar componentes opcionais do ArgoCD para economizar pods e memória no cluster
+kubectl scale deployment argocd-dex-server argocd-notifications-controller argocd-applicationset-controller -n argocd --replicas=0 2>/dev/null || true
+
 echo "Aguardando pods do ArgoCD ficarem prontos..."
 kubectl wait --for=condition=available --timeout=300s deployment/argocd-server -n argocd
 

@@ -154,8 +154,9 @@ resource "aws_db_parameter_group" "postgres" {
 resource "aws_secretsmanager_secret" "db_credentials" {
   for_each = { for db in var.databases : db.name => db }
 
-  name        = "${var.name_prefix}/${each.value.name}-db-credentials"
-  description = "Credenciais do banco ${each.value.name}"
+  name                    = "${var.name_prefix}/${each.value.name}-db-credentials"
+  description             = "Credenciais do banco ${each.value.name}"
+  recovery_window_in_days = 0
 
   tags = {
     Name    = "${var.name_prefix}-${each.value.name}-db-credentials"

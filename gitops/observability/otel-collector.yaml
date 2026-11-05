@@ -50,8 +50,14 @@ data:
           - key: service.namespace
             value: togglemaster
             action: upsert
+          - key: namespace
+            value: togglemaster
+            action: upsert
           - key: deployment.environment
             value: production
+            action: upsert
+          - key: loki.resource.labels
+            value: service.name, service.namespace, namespace
             action: upsert
 
       batch:

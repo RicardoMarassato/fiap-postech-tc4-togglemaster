@@ -4,6 +4,9 @@
 # =============================================================================
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SERVICES_DIR="${SCRIPT_DIR}/../services"
+
 REGION="us-east-1"
 ACCOUNT_ID=$(aws sts get-caller-identity --region "${REGION}" --query Account --output text)
 REGISTRY="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
@@ -16,7 +19,7 @@ SERVICES=("auth-service" "flag-service" "targeting-service" "evaluation-service"
 for SERVICE in "${SERVICES[@]}"; do
   echo ""
   echo "=== [${SERVICE}] Construindo imagem Docker ==="
-  docker build --network=host -t "${REGISTRY}/togglemaster/${SERVICE}:latest" "../services/${SERVICE}"
+  docker build --network=host -t "${REGISTRY}/togglemaster/${SERVICE}:latest" "${SERVICES_DIR}/${SERVICE}"
   
   echo "=== [${SERVICE}] Enviando para o ECR ==="
   docker push "${REGISTRY}/togglemaster/${SERVICE}:latest"
