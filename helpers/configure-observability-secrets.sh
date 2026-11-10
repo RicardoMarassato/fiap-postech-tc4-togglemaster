@@ -1,24 +1,24 @@
 #!/bin/bash
 # =============================================================================
-# Configura as chaves do New Relic, PagerDuty e Discord no Kubernetes
-# =============================================================================
-# Uso:
-#   export NEW_RELIC_LICENSE_KEY="sua_chave_nral"
-#   export PAGERDUTY_INTEGRATION_KEY="sua_integration_key_pagerduty"
-#   export DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/..."
-#   ./helpers/configure-observability-secrets.sh
+# Configura as chaves do New Relic, OpsGenie e Discord no Kubernetes
 # =============================================================================
 set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+if [ -f "${ROOT_DIR}/.env.observability" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${ROOT_DIR}/.env.observability"
+  set +a
+fi
 
 NAMESPACE="monitoring"
 NEW_RELIC_ENDPOINT="${NEW_RELIC_OTLP_ENDPOINT:-https://otlp.nr-data.net:4318}"
 
-if [ -z "${NEW_RELIC_LICENSE_KEY}" ] || [ -z "${PAGERDUTY_INTEGRATION_KEY}" ] || [ -z "${DISCORD_WEBHOOK_URL}" ]; then
-  echo "Uso:"
-  echo "  export NEW_RELIC_LICENSE_KEY='...NRAL'"
-  echo "  export PAGERDUTY_INTEGRATION_KEY='...'"
-  echo "  export DISCORD_WEBHOOK_URL='https://discord.com/api/webhooks/...'"
-  echo "  ./helpers/configure-observability-secrets.sh"
+if [ -z "${NEW_RELIC_LICENSE_KEY}" ] || [ -z "${OPSGENIE_API_KEY}" ] || [ -z "${DISCORD_WEBHOOK_URL}" ]; then
+  echo "Erro: Defina NEW_RELIC_LICENSE_KEY, OPSGENIE_API_KEY e DISCORD_WEBHOOK_URL no .env.observability ou no ambiente."
   exit 1
 fi
 
@@ -29,7 +29,7 @@ kubectl create secret generic observability-secrets \
   --namespace "${NAMESPACE}" \
   --from-literal=NEW_RELIC_LICENSE_KEY="${NEW_RELIC_LICENSE_KEY}" \
   --from-literal=NEW_RELIC_OTLP_ENDPOINT="${NEW_RELIC_ENDPOINT}" \
-  --from-literal=PAGERDUTY_INTEGRATION_KEY="${PAGERDUTY_INTEGRATION_KEY}" \
+  --from-literal=OPSGENIE_API_KEY="${OPSGENIE_API_KEY}" \
   --from-literal=DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL}" \
   --from-literal=GITHUB_TOKEN="${GITHUB_TOKEN:-}" \
   --dry-run=client -o yaml | kubectl apply -f -

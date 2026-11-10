@@ -35,10 +35,11 @@ Optamos pelo **New Relic** pelos seguintes motivos técnicos e arquiteturais:
 
 ---
 
-### 2.3. Escolha de Gerenciamento de Incidentes: PagerDuty vs OpsGenie
-Optamos pelo **PagerDuty** em conjunto com o **Discord (ChatOps)** pelos seguintes motivos:
-* **Consolidação de Mercado e Descontinuação do OpsGenie:** A Atlassian anunciou oficialmente a descontinuação gradual do OpsGenie (migrando seus recursos para o Jira Service Management), enquanto o **PagerDuty** permanece como a plataforma líder de mercado dedicada à resposta a incidentes de missão crítica.
-* **Events API v2 e Deduplicação Inteligente contra Alert Fatigue:** A integração nativa do Grafana com a Events API v2 do PagerDuty (`integrationKey`) realiza agrupamento automático por `dedup_key` / `group_by` (`alertname`, `service`), evitando que múltiplos disparos do mesmo incidente acordem o engenheiro de plantão repetidamente (*Alert Fatigue*) e fechando o incidente automaticamente (`auto-resolve`) assim que o **Self-Healing** restaura a saúde do serviço.
+### 2.3. Escolha de Gerenciamento de Incidentes: OpsGenie (Atlassian JSM) vs PagerDuty
+Optamos pelo **OpsGenie (integrado ao Atlassian Jira Service Management)** em conjunto com o **Discord (ChatOps)** pelos seguintes motivos:
+* **Unificação de Alertas e Gestão de Incidentes (ITSM):** Com a incorporação nativa do motor de alertas e plantão (*on-call*) do OpsGenie dentro do Jira Service Management, os alertas críticos disparados pelo Grafana já são correlacionados diretamente com o fluxo de gestão de incidentes e post-mortems da equipe de SRE em uma única plataforma.
+* **Integração Nativa com Grafana e Deduplicação contra Alert Fatigue:** O Contact Point nativo do OpsGenie no Grafana realiza agrupamento e deduplicação automática de alertas por `alias` (`alertname` + `service`), evitando que múltiplos disparos do mesmo incidente gerem fadiga de alertas (*Alert Fatigue*) e fechando o alerta automaticamente (`autoClose: true`) assim que o **Self-Healing** restaura a saúde do serviço.
+* **Plano Gratuito Completo para Equipes de Engenharia:** Permite uso imediato sem bloqueio de domínios de e-mail pessoais/acadêmicos, oferecendo API REST de alertas v2 completa para até 3 agentes no plano Free.
 
 ---
 

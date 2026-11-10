@@ -31,7 +31,7 @@ pwd = urllib.parse.quote(str(data["password"]), safe="")
 host = data["host"]
 port = data.get("port", 5432)
 db = data["database"]
-print(f"postgresql://{user}:{pwd}@{host}:{port}/{db}")
+print(f"postgresql://{user}:{pwd}@{host}:{port}/{db}?sslmode=require")
 ' "${SECRET_JSON}"
 }
 

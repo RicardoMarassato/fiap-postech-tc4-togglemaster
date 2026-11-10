@@ -14,6 +14,11 @@ kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
 kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
 kubectl create namespace togglemaster --dry-run=client -o yaml | kubectl apply -f -
 
+# Configurar Secret observability-secrets (New Relic, OpsGenie, Discord) se .env.observability existir
+if [ -x "${SCRIPT_DIR}/../../helpers/configure-observability-secrets.sh" ]; then
+  "${SCRIPT_DIR}/../../helpers/configure-observability-secrets.sh" || true
+fi
+
 # Instalar ArgoCD usando Server-Side Apply (necessário para CRDs grandes)
 kubectl apply -n argocd --server-side --force-conflicts -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
