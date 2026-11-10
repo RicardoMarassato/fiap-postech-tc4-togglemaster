@@ -89,9 +89,10 @@ resource "aws_db_instance" "databases" {
   storage_encrypted     = true
 
   # Database
-  db_name  = each.value.db_name
-  username = each.value.username
-  password = random_password.db_passwords[each.key].result
+  db_name           = each.value.db_name
+  username          = each.value.username
+  password          = random_password.db_passwords[each.key].result
+  apply_immediately = true
 
   # Network
   db_subnet_group_name   = aws_db_subnet_group.main.name

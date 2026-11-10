@@ -21,23 +21,33 @@ DYNAMO_TABLE=$(terraform -chdir="${TF_DIR}" output -raw dynamodb_table_name)
 
 build_pg_url() {
   local SECRET_NAME="$1"
+  local DB_IDENTIFIER="$2"
   local SECRET_JSON
   SECRET_JSON=$(aws secretsmanager get-secret-value --region "${REGION}" --secret-id "${SECRET_NAME}" --query SecretString --output text)
   python3 -c '
-import json, sys, urllib.parse
+import json, subprocess, sys, urllib.parse
 data = json.loads(sys.argv[1])
+db_id = sys.argv[2]
+region = sys.argv[3]
 user = urllib.parse.quote(str(data["username"]), safe="")
-pwd = urllib.parse.quote(str(data["password"]), safe="")
+pwd_raw = str(data["password"])
+pwd = urllib.parse.quote(pwd_raw, safe="")
 host = data["host"]
 port = data.get("port", 5432)
 db = data["database"]
+subprocess.run(
+    ["aws", "rds", "modify-db-instance", "--region", region, "--db-instance-identifier", db_id, "--master-user-password", pwd_raw, "--apply-immediately"],
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+    check=False,
+)
 print(f"postgresql://{user}:{pwd}@{host}:{port}/{db}?sslmode=require")
-' "${SECRET_JSON}"
+' "${SECRET_JSON}" "${DB_IDENTIFIER}" "${REGION}"
 }
 
-AUTH_DB_URL=$(build_pg_url "togglemaster-prod/auth-db-credentials")
-FLAGS_DB_URL=$(build_pg_url "togglemaster-prod/flags-db-credentials")
-TARGETING_DB_URL=$(build_pg_url "togglemaster-prod/targeting-db-credentials")
+AUTH_DB_URL=$(build_pg_url "togglemaster-prod/auth-db-credentials" "togglemaster-prod-auth-db")
+FLAGS_DB_URL=$(build_pg_url "togglemaster-prod/flags-db-credentials" "togglemaster-prod-flags-db")
+TARGETING_DB_URL=$(build_pg_url "togglemaster-prod/targeting-db-credentials" "togglemaster-prod-targeting-db")
 
 echo "=== 3. Atualizando gitops/base/secrets.yaml e gitops/base/configmap.yaml ==="
 cat > "${ROOT_DIR}/gitops/base/secrets.yaml" <<EOF
@@ -126,5 +136,11 @@ EOF
 kubectl create namespace togglemaster --dry-run=client -o yaml | kubectl apply -f -
 kubectl apply -f "${ROOT_DIR}/gitops/base/secrets.yaml"
 kubectl apply -f "${ROOT_DIR}/gitops/base/configmap.yaml"
+kubectl apply -f "${ROOT_DIR}/gitops/observability/grafana-alerting.yaml"
+
+echo "=== 4. Aguardando 15s para o RDS aplicar a nova senha e reiniciando os pods ==="
+sleep 15
+kubectl rollout restart deployment/kube-prometheus-stack-grafana -n monitoring
+kubectl rollout restart deployment -n togglemaster
 
 echo "=== Sucesso! Manifestos GitOps atualizados e aplicados no cluster! ==="
