@@ -85,7 +85,7 @@ data:
           - uid: auth-service-5xx-alert
             title: AuthServiceHigh5xxErrorRate
             condition: C
-            for: 30s
+            for: 10s
             noDataState: OK
             execErrState: OK
             annotations:

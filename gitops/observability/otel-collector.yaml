@@ -92,7 +92,7 @@ data:
         headers:
           api-key: "${env:NEW_RELIC_LICENSE_KEY}"
 
-      # 5. Exportador Debug (permite evidenciar no vídeo o roteamento em tempo real nos logs do pod)
+      # 5. Exportador Debug
       debug:
         verbosity: normal
 

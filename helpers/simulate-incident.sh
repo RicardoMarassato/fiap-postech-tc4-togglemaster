@@ -46,35 +46,53 @@ sleep 2
 
 echo ""
 echo "2. Injetando falha crítica (Chaos Mode -> HTTP 500) em ${SERVICE}..."
-curl -s -X POST "http://localhost:${LOCAL_PORT}/chaos?enable=true" && echo ""
+CHAOS_OK=false
+for attempt in $(seq 1 15); do
+  CHAOS_RESP=$(curl -s -X POST "http://localhost:${LOCAL_PORT}/chaos?enable=true" || true)
+  if echo "${CHAOS_RESP}" | grep -q "true"; then
+    echo "   Chaos Mode ativado com sucesso: ${CHAOS_RESP}"
+    CHAOS_OK=true
+    break
+  fi
+  sleep 1
+done
+
+if [ "${CHAOS_OK}" != "true" ]; then
+  echo "   Aviso: tentando ativar Chaos Mode via kubectl exec/port-forward..."
+  kubectl port-forward "svc/${SERVICE}" -n "${NAMESPACE}" "${LOCAL_PORT}:${PORT}" >/dev/null 2>&1 &
+  PF_PID=$!
+  sleep 4
+  curl -s -X POST "http://localhost:${LOCAL_PORT}/chaos?enable=true" || true
+  echo ""
+fi
 
 echo ""
-echo "3. Gerando requisições com erro HTTP 500 por 60 segundos para disparar o alerta (>5% 5xx)..."
-echo "   Enquanto isso, acompanhe em outro terminal:"
-echo "     kubectl get pods -n togglemaster -l app=${SERVICE} -w"
-echo "     kubectl logs -n monitoring -l app=self-healing-service -f"
+echo "3. Gerando requisições com erro HTTP 500 para disparar o alerta (>5% 5xx)..."
 echo ""
 
-for i in $(seq 1 45); do
+for i in $(seq 1 60); do
   # Reconecta port-forward caso o pod tenha sido reiniciado pelo Self-Healing!
   if ! kill -0 ${PF_PID} 2>/dev/null; then
     kubectl port-forward "svc/${SERVICE}" -n "${NAMESPACE}" "${LOCAL_PORT}:${PORT}" >/dev/null 2>&1 &
     PF_PID=$!
-    sleep 2
+    sleep 3
   fi
 
   HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${LOCAL_PORT}${TEST_PATH}" || echo "restarting")
-  echo "   [Req ${i}/45] GET ${TEST_PATH} -> HTTP ${HTTP_CODE}"
+  # Dispara 3 chamadas rápidas por iteração para acelerar a subida da métrica no Prometheus
+  curl -s -o /dev/null "http://localhost:${LOCAL_PORT}${TEST_PATH}" 2>/dev/null || true
+  curl -s -o /dev/null "http://localhost:${LOCAL_PORT}${TEST_PATH}" 2>/dev/null || true
+  echo "   [Req ${i}/60] GET ${TEST_PATH} -> HTTP ${HTTP_CODE}"
 
   if [ "${HTTP_CODE}" == "restarting" ] || [ "${HTTP_CODE}" == "000" ]; then
     echo "   ⚡ Conexão interrompida porque o Self-Healing reiniciou o pod! Reconectando ao novo pod..."
     kill ${PF_PID} 2>/dev/null || true
-    sleep 3
+    sleep 4
     kubectl port-forward "svc/${SERVICE}" -n "${NAMESPACE}" "${LOCAL_PORT}:${PORT}" >/dev/null 2>&1 &
     PF_PID=$!
-    sleep 2
+    sleep 3
   fi
-  sleep 2
+  sleep 1
 done
 
 echo ""

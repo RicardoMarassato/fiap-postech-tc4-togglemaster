@@ -178,7 +178,7 @@ data:
           "targets": [
             {
               "datasource": { "type": "prometheus", "uid": "prometheus" },
-              "expr": "(sum by (service) (rate(http_requests_total{status_code=~\"5..\"}[1m])) / clamp_min(sum by (service) (rate(http_requests_total[1m])), 0.0001)) * 100",
+              "expr": "((sum by (service) (rate(http_requests_total{status_code=~\"5..\"}[1m])) or (0 * sum by (service) (rate(http_requests_total[1m])))) / clamp_min(sum by (service) (rate(http_requests_total[1m])), 0.0001)) * 100",
               "legendFormat": "{{service}} (5xx %)",
               "refId": "A"
             }
