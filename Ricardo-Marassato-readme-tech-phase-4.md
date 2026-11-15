@@ -60,8 +60,8 @@ Para garantir mitigação imediata sem intervenção humana quando o alerta `Aut
 ### 3.2. Print de um Trace Distribuído e Service Map no New Relic (APM)
 *(Inserir captura de tela do New Relic mostrando o Service Map com os 5 microsserviços e o Trace Distribuído de uma requisição `GET /evaluate` passando por `evaluation-service`, `flag-service`, `targeting-service`, `auth-service` e `analytics-service`)*
 
-### 3.3. Print do Incidente no PagerDuty e Notificação no ChatOps (Discord)
-*(Inserir captura de tela do incidente aberto automaticamente no PagerDuty e das mensagens de alerta + confirmação de Self-Healing no canal do Discord)*
+### 3.3. Print do Incidente no OpsGenie (Jira Service Management) e Notificação no ChatOps (Discord)
+*(Inserir captura de tela do alerta/incidente aberto automaticamente no OpsGenie/JSM e das mensagens de alerta + confirmação de Self-Healing no canal do Discord)*
 
 ### 3.4. Print do Log e Execução da Automação de Self-Healing
 *(Inserir captura de tela do terminal mostrando o alerta `Firing`, o log do `self-healing-service` executando `kubectl rollout restart deployment/auth-service -n togglemaster` e o pod sendo recriado automaticamente no Kubernetes)*

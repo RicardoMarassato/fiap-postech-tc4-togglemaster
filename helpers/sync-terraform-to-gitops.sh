@@ -134,13 +134,14 @@ data:
 EOF
 
 kubectl create namespace togglemaster --dry-run=client -o yaml | kubectl apply -f -
+kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
 kubectl apply -f "${ROOT_DIR}/gitops/base/secrets.yaml"
 kubectl apply -f "${ROOT_DIR}/gitops/base/configmap.yaml"
 kubectl apply -f "${ROOT_DIR}/gitops/observability/grafana-alerting.yaml"
 
-echo "=== 4. Aguardando 15s para o RDS aplicar a nova senha e reiniciando os pods ==="
+echo "=== 4. Aguardando 15s para o RDS aplicar a nova senha e reiniciando os pods (se já existirem) ==="
 sleep 15
-kubectl rollout restart deployment/kube-prometheus-stack-grafana -n monitoring
-kubectl rollout restart deployment -n togglemaster
+kubectl rollout restart deployment/kube-prometheus-stack-grafana -n monitoring 2>/dev/null || true
+kubectl rollout restart deployment -n togglemaster 2>/dev/null || true
 
 echo "=== Sucesso! Manifestos GitOps atualizados e aplicados no cluster! ==="
