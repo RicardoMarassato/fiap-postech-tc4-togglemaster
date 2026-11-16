@@ -1,6 +1,17 @@
 # ToggleMaster V4 - Observabilidade Total, OpenTelemetry, APM & Self-Healing
 
-Este repositório contém a implementação completa da **Fase 4 (Tech Challenge)** do projeto **ToggleMaster**, evolucionando a arquitetura automatizada das Fases 1, 2 e 3 (5 microsserviços conteinerizados, IaC com Terraform na AWS, pipelines de CI/CD DevSecOps no GitHub Actions e GitOps com ArgoCD no EKS) com uma stack corporativa de **Observabilidade Total (Métricas, Logs e Traces padronizados via OpenTelemetry)** e **Resposta Ativa a Incidentes com Self-Healing Automático**.
+Este repositório contém a implementação da **Fase 4 (Tech Challenge)** do projeto **ToggleMaster**, evoluindo a arquitetura automatizada das Fases 1, 2 e 3 (5 microsserviços conteinerizados, IaC com Terraform na AWS, pipelines de CI/CD DevSecOps no GitHub Actions e GitOps com ArgoCD no EKS) com uma stack completa de **Observabilidade (Métricas, Logs e Traces padronizados via OpenTelemetry)** e **Resposta Ativa a Incidentes com Self-Healing Automático**.
+
+---
+
+## Informações de Entrega
+
+* **Aluno:** Ricardo Marassato Campos
+* **RM:** 370358
+* **Username Discord:** `marassato7700`
+* **Repositório do GitHub:** [fiap-postech-tc4-togglemaster](https://github.com/RicardoMarassato/fiap-postech-tc4-togglemaster)
+* **Link do Vídeo de Demonstração:** [Vídeo de Demonstração (Google Drive)](https://drive.google.com/file/d/1WqGB6CuTSa4Txdk085_Xmvo4GIFsP2ja/view?usp=sharing)
+* **Relatório Técnico Completo:** [Ricardo-Marassato-readme-tech-phase-4.md](Ricardo-Marassato-readme-tech-phase-4.md)
 
 ---
 
@@ -28,7 +39,7 @@ flowchart LR
 
     subgraph EXT["Ferramentas Externas (APM, Incidentes & ChatOps)"]
         NR["New Relic APM\n(Distributed Tracing & Service Map)"]
-        PD["PagerDuty\n(Gestão de Incidentes)"]
+        OG["OpsGenie / Jira Service Management\n(Gestão de Incidentes)"]
         DISC["Discord\n(Notificação ChatOps)"]
         GHA["GitHub Actions\n(Self-Healing Runbook)"]
     end
@@ -48,7 +59,7 @@ flowchart LR
     PROM --> GRAF
     LOKI --> GRAF
 
-    GRAF -->|1. Abre Incidente| PD
+    GRAF -->|1. Abre Incidente| OG
     GRAF -->|2. Alerta Detalhado| DISC
     GRAF -->|3. Webhook Firing| HEAL
 
@@ -85,12 +96,12 @@ Todos os 5 microsserviços foram instrumentados nativamente com o SDK do **OpenT
 * **`evaluation-service` (Go):** [`services/evaluation-service/telemetry.go`](services/evaluation-service/telemetry.go), [`evaluator.go`](services/evaluation-service/evaluator.go) e [`sqs.go`](services/evaluation-service/sqs.go) — Spans para Redis (`redis.get`, `redis.set`), propagação concorrente do header W3C `traceparent` nas chamadas HTTP para `flag-service` e `targeting-service`, e injeção do `traceparent` nas mensagens publicadas na fila **AWS SQS** (`sqs.send_message`).
 * **`flag-service` (Python/Flask):** [`services/flag-service/telemetry.py`](services/flag-service/telemetry.py) — Auto-instrumentação de `Flask`, `requests` (propagando trace para o `auth-service`), `psycopg2` (PostgreSQL) e `logging` via OTLP.
 * **`targeting-service` (Python/Flask):** [`services/targeting-service/telemetry.py`](services/targeting-service/telemetry.py) — Auto-instrumentação de `Flask`, `requests` (propagando trace para o `auth-service`), `psycopg2` (PostgreSQL) e `logging` via OTLP.
-* **`analytics-service` (Python/SQS/DynamoDB):** [`services/analytics-service/telemetry.py`](services/analytics-service/telemetry.py) e [`app.py`](services/analytics-service/app.py) — Extrai o `traceparent` da mensagem SQS enviada pelo `evaluation-service` e continua o **mesmo Trace Distribuído** até a gravação no **Amazon DynamoDB** (`sqs.process_message` -> `dynamodb.put_item`), permitindo visualizar os **5 microsserviços conectados no Service Map do New Relic**!
+* **`analytics-service` (Python/SQS/DynamoDB):** [`services/analytics-service/telemetry.py`](services/analytics-service/telemetry.py) e [`app.py`](services/analytics-service/app.py) — Extrai o `traceparent` da mensagem SQS enviada pelo `evaluation-service` e continua o **mesmo Trace Distribuído** até a gravação no **Amazon DynamoDB** (`sqs.process_message` -> `dynamodb.put_item`), permitindo visualizar os **5 microsserviços conectados no Service Map do New Relic**.
 
-### 4. Alertas Inteligentes, PagerDuty, Discord e Self-Healing
+### 4. Alertas Inteligentes, OpsGenie (JSM), Discord e Self-Healing
 * **Criação do Alerta ([`gitops/observability/grafana-alerting.yaml`](gitops/observability/grafana-alerting.yaml)):**
   * Regra `AuthServiceHigh5xxErrorRate` (e `EvaluationServiceHigh5xxErrorRate`): dispara (`Firing`) quando a taxa de erros HTTP 5xx ultrapassa **5%**.
-* **Gerenciamento de Incidentes (PagerDuty):** Contact Point integrado via Events API v2 (`integrationKey`) que abre incidente crítico automaticamente no PagerDuty.
+* **Gerenciamento de Incidentes (OpsGenie / Jira Service Management):** Contact Point integrado via API do OpsGenie (`api.opsgenie.com`) que abre e fecha o alerta/incidente crítico automaticamente no Jira Service Management.
 * **Notificação ChatOps (Discord):** Contact Point integrado via Webhook do Discord enviando card detalhado do incidente e da mitigação automática.
 * **Self-Healing Automático (Dupla Camada):**
   1. **In-Cluster Webhook Service ([`gitops/observability/self-healing.yaml`](gitops/observability/self-healing.yaml) e [`services/self-healing-service/app.py`](services/self-healing-service/app.py)):** Microsserviço com `ServiceAccount` e `Role`/`RoleBinding` no Kubernetes que recebe o alerta do Grafana e executa imediatamente o equivalente a `kubectl rollout restart deployment/auth-service -n togglemaster` via API do Kubernetes, além de enviar confirmação no Discord.
@@ -98,16 +109,16 @@ Todos os 5 microsserviços foram instrumentados nativamente com o SDK do **OpenT
 
 ---
 
-## Como Executar e Demonstrar na Prática (Roteiro para o Vídeo)
+## Como Executar e Demonstrar na Prática
 
 ### Passo 1: Provisionar Infraestrutura e GitOps (ArgoCD)
 ```bash
 # 1. Instalar/Atualizar ArgoCD e todas as Applications (5 apps + Prometheus + Grafana + Loki + OTel + Self-Healing)
 ./gitops/argocd/install.sh
 
-# 2. Configurar as chaves do New Relic, PagerDuty e Discord no cluster
+# 2. Configurar as chaves do New Relic, OpsGenie e Discord no cluster
 export NEW_RELIC_LICENSE_KEY="sua_chave_ingest_nral"
-export PAGERDUTY_INTEGRATION_KEY="sua_integration_key_pagerduty"
+export OPSGENIE_API_KEY="sua_api_key_opsgenie_jsm"
 export DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/..."
 ./helpers/configure-observability-secrets.sh
 ```
@@ -130,4 +141,12 @@ kubectl logs -n monitoring -l app=self-healing-service -f
 # No terminal principal, execute o simulador de incidente (injeta HTTP 500 no auth-service):
 ./helpers/simulate-incident.sh auth-service
 ```
-O script ativa o modo de falha em memória (`POST /chaos?enable=true`) no `auth-service`, elevando a taxa de erros HTTP 5xx acima de 5%. O alerta dispara no Grafana, abre o incidente no **PagerDuty**, notifica o **Discord** e aciona o **Self-Healing**, que executa o `rollout restart` do `deployment/auth-service`. O novo pod sobe saudável (sem o estado de falha em memória) e a taxa de erros volta a 0% sem intervenção humana!
+O script ativa o modo de falha em memória (`POST /chaos?enable=true`) no `auth-service`, elevando a taxa de erros HTTP 5xx acima de 5%. O alerta dispara no Grafana, abre o incidente no **OpsGenie / Jira Service Management**, notifica o **Discord** e aciona o **Self-Healing**, que executa o `rollout restart` do `deployment/auth-service`. O novo pod sobe saudável (sem o estado de falha em memória) e a taxa de erros volta a 0% sem intervenção humana.
+
+---
+
+## Relatório Técnico Completo de Entrega
+
+Toda a fundamentação técnica, justificativas de arquitetura (OpenTelemetry, New Relic vs Datadog, OpsGenie/JSM vs PagerDuty), desafios enfrentados, prints de evidência e próximos passos estão documentados no relatório oficial:
+
+👉 **[Relatório Técnico de Entrega - Fase 4](Ricardo-Marassato-readme-tech-phase-4.md)**
